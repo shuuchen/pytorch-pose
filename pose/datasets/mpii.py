@@ -19,8 +19,8 @@ class Mpii(data.Dataset):
         self.img_folder = kwargs['image_path'] # root image folders
         self.jsonfile   = kwargs['anno_path']
         self.is_train   = is_train # training set or test set
-        self.inp_res    = kwargs['inp_res']
-        self.out_res    = kwargs['out_res']
+        self.inp_res    = 256#kwargs['inp_res']
+        self.out_res    = 256#kwargs['out_res']
         self.sigma      = kwargs['sigma']
         self.scale_factor = kwargs['scale_factor']
         self.rot_factor = kwargs['rot_factor']
@@ -124,7 +124,6 @@ class Mpii(data.Dataset):
         # Meta info
         meta = {'index' : index, 'center' : c, 'scale' : s,
         'pts' : pts, 'tpts' : tpts, 'target_weight': target_weight}
-
         return inp, target, meta
 
     def __len__(self):

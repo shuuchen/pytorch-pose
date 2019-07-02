@@ -29,11 +29,9 @@ model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.__dict__[name]))
 
-
 dataset_names = sorted(name for name in datasets.__dict__
     if name.islower() and not name.startswith("__")
     and callable(datasets.__dict__[name]))
-
 
 # init global variables
 best_acc = 0
@@ -73,7 +71,9 @@ def main(args):
     model = torch.nn.DataParallel(model).to(device)
 
     # define loss function (criterion) and optimizer
-    criterion = losses.JointsMSELoss().to(device)
+    #criterion = losses.JointsMSELoss().to(device)
+    criterion = losses.JointsBELoss().to(device)
+    print('==> loss function: %s' % criterion.__str__())
 
     if args.solver == 'rms':
         optimizer = torch.optim.RMSprop(model.parameters(),
@@ -169,8 +169,8 @@ def main(args):
         }, predictions, is_best, checkpoint=args.checkpoint, snapshot=args.snapshot)
 
     logger.close()
-    logger.plot(['Train Acc', 'Val Acc'])
-    savefig(os.path.join(args.checkpoint, 'log.eps'))
+    #logger.plot(['Train Acc', 'Val Acc'])
+    #savefig(os.path.join(args.checkpoint, 'log.eps'))
 
 
 def train(train_loader, model, criterion, optimizer, debug=False, flip=True):
@@ -203,7 +203,7 @@ def train(train_loader, model, criterion, optimizer, debug=False, flip=True):
         else:  # single output
             loss = criterion(output, target, target_weight)
         acc = accuracy(output, target, idx)
-
+	
         if debug: # visualize groundtruth and predictions
             gt_batch_img = batch_with_heatmap(input, target)
             pred_batch_img = batch_with_heatmap(input, output)
