@@ -6,6 +6,7 @@ import time
 import matplotlib.pyplot as plt
 
 import torch
+import torch.nn as nn
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
@@ -67,14 +68,14 @@ def main(args):
     print("==> creating model '{}', stacks={}, blocks={}".format(args.arch, args.stacks, args.blocks))
     model = models.__dict__[args.arch](num_stacks=args.stacks,
                                        num_blocks=args.blocks,
-                                       num_classes=16,#njoints,
+                                       num_classes=16,# read as 16, the nmodified to 70
                                        resnet_layers=args.resnet_layers)
 
     model = torch.nn.DataParallel(model).to(device)
-
+    #print(list(model.children())); exit(1)
     # define loss function (criterion) and optimizer
-    criterion = losses.JointsMSELoss().to(device)
-    #criterion = losses.JointsBELoss().to(device)
+    #criterion = losses.JointsMSELoss().to(device)
+    criterion = torch.nn.MSELoss().to(device)
     print('==> loss function: %s' % criterion.__str__())
 
     if args.solver == 'rms':
@@ -114,15 +115,21 @@ def main(args):
     print('    Total params: %.2fM'
           % (sum(p.numel() for p in model.parameters())/1000000.0))
 
+    # update the final score layer and fine tuning => update number of output channels to 70
+    #print(list(model.children())[-1].score[0]); exit(1)
+    model_net = list(model.children())
+    model_net[-1].score[0] = nn.Conv2d(256, 70, kernel_size=(1, 1), stride=(1, 1)).to(device)
+    model = nn.Sequential(*model_net)
+
     # create data loader
-    train_dataset = datasets.__dict__[args.dataset](is_train=True, **vars(args))
+    train_dataset = datasets.__dict__[args.dataset](**vars(args))
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.train_batch, shuffle=True,
         num_workers=args.workers, pin_memory=True
     )
 
-    val_dataset = datasets.__dict__[args.dataset](is_train=False, **vars(args))
+    val_dataset = datasets.__dict__[args.dataset](is_train=False, is_valid=True, **vars(args))
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size=args.test_batch, shuffle=False,
@@ -156,8 +163,9 @@ def main(args):
         valid_loss, valid_acc, predictions = validate(val_loader, model, criterion,
                                                   njoints, args.debug, args.flip)
 
+        print(epoch + 1, lr, train_loss, valid_loss, train_acc, valid_acc)
         # append logger file
-        logger.append([epoch + 1, lr, train_loss, valid_loss, train_acc, valid_acc])
+        logger.append([epoch + 1, lr, train_loss, valid_loss, train_acc.item(), valid_acc.item()])
 
         # remember best acc and save checkpoint
         is_best = valid_acc > best_acc
@@ -188,22 +196,23 @@ def train(train_loader, model, criterion, optimizer, debug=False, flip=True):
 
     gt_win, pred_win = None, None
     bar = Bar('Train', max=len(train_loader))
-    for i, (input, target, meta) in enumerate(train_loader):
+    for i, (input, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
         input, target = input.to(device), target.to(device, non_blocking=True)
-        target_weight = meta['target_weight'].to(device, non_blocking=True)
+        #target_weight = meta['target_weight'].to(device, non_blocking=True)
 
         # compute output
         output = model(input)
         if type(output) == list:  # multiple output
             loss = 0
             for o in output:
-                loss += criterion(o, target, target_weight)
+                #print(o.size(), target.size()); exit(1)
+                loss += criterion(o, target)
             output = output[-1]
         else:  # single output
-            loss = criterion(output, target, target_weight)
+            loss = criterion(output, target)
         acc = accuracy(output, target, idx)
 	
         if debug: # visualize groundtruth and predictions
@@ -268,13 +277,13 @@ def validate(val_loader, model, criterion, num_classes, debug=False, flip=True):
     end = time.time()
     bar = Bar('Eval ', max=len(val_loader))
     with torch.no_grad():
-        for i, (input, target, meta) in enumerate(val_loader):
+        for i, (input, target) in enumerate(val_loader):
             # measure data loading time
             data_time.update(time.time() - end)
 
             input = input.to(device, non_blocking=True)
             target = target.to(device, non_blocking=True)
-            target_weight = meta['target_weight'].to(device, non_blocking=True)
+            #target_weight = meta['target_weight'].to(device, non_blocking=True)
 
             # compute output
             output = model(input)
@@ -291,17 +300,17 @@ def validate(val_loader, model, criterion, num_classes, debug=False, flip=True):
             if type(output) == list:  # multiple output
                 loss = 0
                 for o in output:
-                    loss += criterion(o, target, target_weight)
+                    loss += criterion(o, target)
                 output = output[-1]
             else:  # single output
-                loss = criterion(output, target, target_weight)
+                loss = criterion(output, target)
 
             acc = accuracy(score_map, target.cpu(), idx)
 
             # generate predictions
-            preds = final_preds(score_map, meta['center'], meta['scale'], [64, 64])
-            for n in range(score_map.size(0)):
-                predictions[meta['index'][n], :, :] = preds[n, :, :]
+            #preds = final_preds(score_map, meta['center'], meta['scale'], [64, 64])
+            #for n in range(score_map.size(0)):
+            #    predictions[meta['index'][n], :, :] = preds[n, :, :]
 
 
             if debug:
@@ -350,8 +359,16 @@ if __name__ == '__main__':
                         help='Datasets: ' +
                             ' | '.join(dataset_names) +
                             ' (default: mpii)')
+
     parser.add_argument('--image-path', default='', type=str,
-                        help='path to images')
+                        help='path to training images')
+
+    parser.add_argument('--image-path-val', default='', type=str,
+                        help='path to validation images')
+
+    parser.add_argument('--image-path-test', default='', type=str,
+                        help='path to test images')
+
     parser.add_argument('--anno-path', default='', type=str,
                         help='path to annotation (json)')
     parser.add_argument('--year', default=2014, type=int, metavar='N',

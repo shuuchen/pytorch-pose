@@ -27,7 +27,7 @@ class PartDetectNet(nn.Module):
 		x = self.b5(x)
 		x = self.b6(x)
 		x = self.b7(x)
-		#x = NF.interpolate(x, 256, mode='bilinear', align_corners=True)
+		x = NF.interpolate(x, 256, mode='bilinear', align_corners=True)
 
 		return x
 
