@@ -3,6 +3,8 @@ from __future__ import print_function, absolute_import
 import os
 import argparse
 import time
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 
 import torch
@@ -75,6 +77,7 @@ def main(args):
     #print(list(model.children())); exit(1)
     # define loss function (criterion) and optimizer
     #criterion = losses.JointsMSELoss().to(device)
+    #criterion = torch.nn.BCEWithLogitsLoss().to(device)
     criterion = torch.nn.MSELoss().to(device)
     print('==> loss function: %s' % criterion.__str__())
 
@@ -145,7 +148,10 @@ def main(args):
         return
 
     # train and eval
+    df_loss = pd.DataFrame()
+    train_epo_loss, val_epo_loss = [], []
     lr = args.lr
+    best_vel = np.float('inf')
     for epoch in range(args.start_epoch, args.epochs + args.start_epoch):
         lr = adjust_learning_rate(optimizer, epoch, lr, args.schedule, args.gamma)
         print('\nEpoch: %d | LR: %.8f' % (epoch + 1, lr))
@@ -156,20 +162,25 @@ def main(args):
             val_loader.dataset.sigma *=  args.sigma_decay
 
         # train for one epoch
-        train_loss, train_acc = train(train_loader, model, criterion, optimizer,
+        train_loss, train_acc, tel = train(train_loader, model, criterion, optimizer,
                                       args.debug, args.flip)
 
         # evaluate on validation set
-        valid_loss, valid_acc, predictions = validate(val_loader, model, criterion,
+        valid_loss, valid_acc, predictions, vel = validate(val_loader, model, criterion,
                                                   njoints, args.debug, args.flip)
+        # save epoch loss to csv
+        train_epo_loss += [tel]
+        val_epo_loss += [vel]
+        df_loss.assign(train=train_epo_loss, val=val_epo_loss).to_csv('./loss.csv')
 
-        print(epoch + 1, lr, train_loss, valid_loss, train_acc, valid_acc)
         # append logger file
         logger.append([epoch + 1, lr, train_loss, valid_loss, train_acc.item(), valid_acc.item()])
 
         # remember best acc and save checkpoint
-        is_best = valid_acc > best_acc
-        best_acc = max(valid_acc, best_acc)
+        #is_best = valid_acc > best_acc
+        #best_acc = max(valid_acc, best_acc)
+        is_best = vel < best_vel
+        best_vel = min(best_vel, vel)
         save_checkpoint({
             'epoch': epoch + 1,
             'arch': args.arch,
@@ -196,6 +207,7 @@ def train(train_loader, model, criterion, optimizer, debug=False, flip=True):
 
     gt_win, pred_win = None, None
     bar = Bar('Train', max=len(train_loader))
+    batch_loss = []
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
@@ -214,7 +226,7 @@ def train(train_loader, model, criterion, optimizer, debug=False, flip=True):
         else:  # single output
             loss = criterion(output, target)
         acc = accuracy(output, target, idx)
-	
+        batch_loss += [loss.item()]
         if debug: # visualize groundtruth and predictions
             gt_batch_img = batch_with_heatmap(input, target)
             pred_batch_img = batch_with_heatmap(input, output)
@@ -258,7 +270,7 @@ def train(train_loader, model, criterion, optimizer, debug=False, flip=True):
         bar.next()
 
     bar.finish()
-    return losses.avg, acces.avg
+    return losses.avg, acces.avg, np.mean(batch_loss)
 
 
 def validate(val_loader, model, criterion, num_classes, debug=False, flip=True):
@@ -276,6 +288,7 @@ def validate(val_loader, model, criterion, num_classes, debug=False, flip=True):
     gt_win, pred_win = None, None
     end = time.time()
     bar = Bar('Eval ', max=len(val_loader))
+    batch_loss = []
     with torch.no_grad():
         for i, (input, target) in enumerate(val_loader):
             # measure data loading time
@@ -306,7 +319,7 @@ def validate(val_loader, model, criterion, num_classes, debug=False, flip=True):
                 loss = criterion(output, target)
 
             acc = accuracy(score_map, target.cpu(), idx)
-
+            batch_loss += [loss.item()]
             # generate predictions
             #preds = final_preds(score_map, meta['center'], meta['scale'], [64, 64])
             #for n in range(score_map.size(0)):
@@ -349,7 +362,7 @@ def validate(val_loader, model, criterion, num_classes, debug=False, flip=True):
             bar.next()
 
         bar.finish()
-    return losses.avg, acces.avg, predictions
+    return losses.avg, acces.avg, predictions, np.mean(batch_loss)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
